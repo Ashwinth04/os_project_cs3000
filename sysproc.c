@@ -5,7 +5,13 @@
 #include "param.h"
 #include "memlayout.h"
 #include "mmu.h"
+#include "spinlock.h"
 #include "proc.h"
+
+extern struct {
+  struct spinlock lock;
+  struct proc proc[NPROC];
+} ptable;
 
 int
 sys_fork(void)
@@ -88,4 +94,79 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+int
+sys_get_process_ancestors(void)
+{
+    struct ancestor_info *buffer;
+    int max_entries;
+    
+    // Get arguments from user space
+    if(argptr(0, (void*)&buffer, sizeof(struct ancestor_info)) < 0 ||
+       argint(1, &max_entries) < 0)
+        return -1;
+        
+    // Validate arguments
+    if(max_entries <= 0 || buffer == 0)
+        return -1;
+    
+    struct proc *current = myproc();
+    int count = 0;
+    
+    acquire(&ptable.lock);
+    
+    while(current != 0 && count < max_entries) {
+        // Safely copy data to user buffer
+        if(copyout(myproc()->pgdir, 
+                  (uint)&buffer[count].pid, 
+                  (void*)&current->pid, 
+                  sizeof(int)) < 0) {
+            release(&ptable.lock);
+            return -1;
+        }
+        
+        // Set parent PID
+        int ppid = (current->parent) ? current->parent->pid : -1;
+        if(copyout(myproc()->pgdir, 
+                  (uint)&buffer[count].parent_pid, 
+                  (void*)&ppid, 
+                  sizeof(int)) < 0) {
+            release(&ptable.lock);
+            return -1;
+        }
+        
+        // Copy process name (optional)
+        if(copyout(myproc()->pgdir, 
+                  (uint)&buffer[count].name, 
+                  (void*)current->name, 
+                  sizeof(current->name)) < 0) {
+            release(&ptable.lock);
+            return -1;
+        }
+        
+        // Move to parent
+        current = current->parent;
+        count++;
+        
+        // Stop at init process
+        if(current && current->pid == 1) {
+            // Include init process in the list
+            if(count < max_entries) {
+                if(copyout(myproc()->pgdir, 
+                          (uint)&buffer[count].pid, 
+                          (void*)&current->pid, 
+                          sizeof(int)) < 0) {
+                    release(&ptable.lock);
+                    return -1;
+                }
+                buffer[count].parent_pid = -1;
+                count++;
+            }
+            break;
+        }
+    }
+    
+    release(&ptable.lock);
+    return count;
 }

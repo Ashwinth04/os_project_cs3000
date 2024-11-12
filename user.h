@@ -23,6 +23,8 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+struct ancestor_info;  // Forward declaration
+int get_process_ancestors(struct ancestor_info* buffer, int max_entries);
 
 // ulib.c
 int stat(const char*, struct stat*);
